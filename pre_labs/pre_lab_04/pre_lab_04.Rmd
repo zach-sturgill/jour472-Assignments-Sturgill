@@ -98,7 +98,7 @@ cleaned_md_grant_loans |>
 
 ### Task 7: Use a different refinr method to clean the Grantee field.
 
-**Task** Run the following code to use the n_gram_merge() function to clean the data, then group by grantee_clean and Grantee to examine recipients that start with W. Look at the differences. Does the changes it made vary substantially from the previous use of key_collision_merge? **Answer**
+**Task** Run the following code to use the n_gram_merge() function to clean the data, then group by grantee_clean and Grantee to examine recipients that start with W. Look at the differences. Does the changes it made vary substantially from the previous use of key_collision_merge? **Answer: This function shortened some of the names and put some results in all caps. The function in task 6 added abbreviations to end of some results such as changing such as changing Walden Sierra to Walden Sierra, Inc.**
 
 ```{r}
 comparison_md_grant_loans <- md_grant_loans |>
