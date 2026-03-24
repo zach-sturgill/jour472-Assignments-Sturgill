@@ -183,7 +183,7 @@ The column we're interested in, ZCTA5N, is a <dbl> column - it's a number. We wa
 **Task** Run the following code to change the datatype of ZCTA5N from numeric to character. What's the datatype of ZCTA5N now? **Answer**
 
 ```{r}
-maryland_zcta <- maryland_zcta |> mutate(across(ZCTA5N, as.character))
+maryland_zcta <- maryland_zcta |> mutate(across(ZCTA5N, as.character)) 
 ```
 
 Now we can join this dataframe to other zip code data where the zip code column is text, not numbers.
