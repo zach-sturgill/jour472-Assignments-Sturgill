@@ -54,8 +54,8 @@ In this notebook, we are reverse engineering five sentences from the story.
 
 ### Sentence 1
 
--   **Sentence text**: [Paste in sentence to engineer here]
--   **Analysis summary**: [Write up two to three sentences describing the results of your analysis. Were you able to confirm the finding? If not, why not?]
+-   **Sentence text**: Sports owners' contributions to federal elections since 2015: \$47 million (\$10m to republicans, \$1.9 million to Dems in 2020 as of publishing.
+-   **Analysis summary**: Our analysis does confirm the finding, as it shows a total of \$10 million to republicans, \$1.9 million to democrats and a \$47 million total.
 
 ```{r}
 # Put code to reverse engineer sentence here
