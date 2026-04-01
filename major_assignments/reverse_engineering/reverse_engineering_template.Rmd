@@ -72,11 +72,16 @@ In this notebook, we are reverse engineering five sentences from the story.
 
 ### Sentence 2
 
--   **Sentence text**: [Paste in sentence to engineer here]
--   **Analysis summary**: [Write up two to three sentences describing the results of your analysis. Were you able to confirm the finding? If not, why not?]
+-   **Sentence text**: "That strong Republican lean is consistent with owners’ spending in the 2018 and 2016 federal elections as well. A deep search in the Federal Election Commission database of campaign finances for principal owners, controlling owners, co-owners and commissioners from the NBA, NFL, NHL, WNBA, MLB and NASCAR reveals that this deep-pocketed group has sent \$34.2 million (72.9 percent) to Republican campaigns or super PACs purely supporting Republican causes, compared to \$10.1 million (21.5 percent) to Democrats over the past three elections. Less than 6 percent of contributions went to bipartisan or unaffiliated recipients."
+-   **Analysis summary**: At first, it looked like the values were slightly off from what the five thirty-eight story initially reported, but after re-doing the math, figured out that the "Bipartisan, but mostly \_\_\_\_" were included in the calculations. After re-running the numbers, everything checked out.
 
 ```{r}
 # Put code to reverse engineer sentence here
+sports_political_donations |> filter(str_detect(election_year, "2016|2018")) |>
+  group_by(party) |>
+  summarise(total = sum(amount)) |>
+  mutate(percent = total/sum(total) * 100) |>
+  arrange(desc(total))
 
 # Display results of code below this codeblock
 
@@ -84,24 +89,40 @@ In this notebook, we are reverse engineering five sentences from the story.
 
 ### Sentence 3
 
--   **Sentence text**: [Paste in sentence to engineer here]
+-   **Sentence text**: But while that overall summary is interesting, a more pronounced signal begins to emerge when we look more closely at this group’s larger political donations. There are 40 owners who have donated at least \$100,000 to Republican causes over the six-year period, compared to 23 owners topping \$100,000 to Democrats, helping lead to these splits
 -   **Analysis summary**: [Write up two to three sentences describing the results of your analysis. Were you able to confirm the finding? If not, why not?]
 
 ```{r}
 # Put code to reverse engineer sentence here
-
+sports_political_donations |>
+  group_by(party, owner) |>
+  summarize(total_donated = sum(amount)) |>
+  filter(total_donated >= 100000) |>
+  summarize(count_owners = n())
 # Display results of code below this codeblock
 
 ```
 
 ### Sentence 4
 
--   **Sentence text**: [Paste in sentence to engineer here]
+-   **Sentence text**: Overall, 51.7 percent of all contributions by WNBA owners went to Democrats, with 42.3 percent going to Republicans. And of the \$1.3 million contributed by WNBA owners to Republicans, 65.5 percent comes from Kelly Loeffler, the Republican from Georgia who is co-owner of the Atlanta Dream.
 -   **Analysis summary**: [Write up two to three sentences describing the results of your analysis. Were you able to confirm the finding? If not, why not?]
 
 ```{r}
 # Put code to reverse engineer sentence here
+sports_political_donations |>
+  filter(str_detect(league, "WNBA")) |>
+  group_by(party) |>
+  summarise(total = sum(amount)) |>
+  mutate(percent = total/sum(total) * 100) |>
+  arrange(desc(total))
 
+sports_political_donations |>
+  filter(str_detect(league, "WNBA") & party == "Republican") |>
+  group_by(owner) |>
+  summarise(total = sum(amount)) |>
+  mutate(percent = total/sum(total) * 100) |>
+  arrange(desc(total))
 # Display results of code below this codeblock
 
 ```
