@@ -1,0 +1,599 @@
+# Women's College Basketball Roster Data Cleaning
+
+This notebook processes and standardizes women's college basketball roster data for the 2024-25 season. The data requires extensive cleaning to standardize heights, positions, years, geographic information, and previous school names.
+
+## Setup and Configuration
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(janitor)
+library(postmastr)
+library(usdata)
+library(rvest)
+
+# Configuration
+INPUT_URL <- "https://raw.githubusercontent.com/dwillis/wbb-rosters/refs/heads/main/rosters_2025-26.csv"
+OUTPUT_FILE <- "wbb_rosters_2025_26.csv"
+TEAMS_URL <- "https://raw.githubusercontent.com/Sports-Roster-Data/womens-college-basketball/main/teams.csv"
+POSITIONS_URL <- "https://raw.githubusercontent.com/dwillis/jour479x_fall_2022/main/data/wbb_positions.csv"
+FIBA_URL <- "https://www.fiba.basketball/rankingwomen"
+
+```
+
+## Load Source Data
+
+```{r load-data, message=FALSE}
+# Load roster data and rename team_id column
+wbb_rosters <- read_csv(INPUT_URL) %>% 
+  rename(ncaa_id = team_id) %>%
+  mutate(team = str_squish(team))
+
+# Load teams metadata
+teams <- read_csv(TEAMS_URL) %>% 
+  select(-url, -twitter, -stats_name) |> distinct()
+
+# Create roster availability indicator
+roster_teams <- wbb_rosters %>% 
+  distinct(ncaa_id) %>% 
+  mutate(has_roster = 1)
+
+teams <- teams %>% 
+  left_join(roster_teams, by = "ncaa_id") %>% 
+  mutate(roster = has_roster)
+
+# Join rosters with team metadata
+wbb_rosters <- wbb_rosters %>% 
+  left_join(teams, by = c("ncaa_id", "team"))
+
+teams |> anti_join(roster_teams, by = "ncaa_id") |> 
+  select(ncaa_id, team)
+
+```
+
+## Height Cleaning
+
+The roster data contains heights in various formats (6'0", 6-0, 6'0, etc.). We standardize all heights to use hyphens (6-0) and create a total inches column for analysis.
+
+```{r clean-heights}
+wbb_rosters |> 
+  filter(is.na(height))
+
+
+wbb_rosters <- wbb_rosters %>%
+  mutate(
+    # Standardize height format to use hyphens
+    height_clean = height %>%
+      str_replace_all("'", "-") %>%
+      str_replace_all("''", "") %>%
+      str_replace_all('"', "")
+  ) %>%
+  # Split into feet and inches
+  separate(height_clean, c("height_ft", "height_in"), sep = "-", extra = "merge") %>%
+  mutate(
+    height_ft = as.numeric(height_ft),
+    height_in = as.numeric(height_in),
+    total_inches = (height_ft * 12) + height_in
+  )
+
+# Check results
+wbb_rosters %>% 
+  select(height, height_ft, height_in, total_inches) %>% 
+  slice_head(n = 5)
+```
+
+## Position Cleaning
+
+Position data comes in various formats and combinations. We standardize positions and separate primary/secondary positions where applicable.
+
+```{r clean-positions}
+
+# check for NA positions
+
+na_positions <- wbb_rosters %>%
+  filter(is.na(position)) %>%
+  distinct(ncaa_id, team)
+
+
+
+# Load position standardization mapping
+positions_cleaned <- read_csv(POSITIONS_URL) %>%
+  select(-count)
+
+wbb_rosters <- wbb_rosters %>%
+  left_join(positions_cleaned, by = "position") %>%
+  mutate(
+    position_full = position_clean,
+    position_clean = na_if(position_clean, "N/A")
+  ) %>%
+  # Split combined positions (e.g., "G/F" -> "Guard"/"Forward")
+  separate(position_clean, c("primary_position", "secondary_position"), 
+           sep = "/", extra = "merge") %>%
+  mutate(
+    # Standardize position abbreviations
+    primary_position = case_when(
+      primary_position == "G" ~ "Guard",
+      primary_position == "C" ~ "Center",
+      primary_position == "F" ~ "Forward",
+      TRUE ~ primary_position
+    ),
+    secondary_position = case_when(
+      secondary_position == "G" ~ "Guard",
+      secondary_position == "C" ~ "Center",
+      secondary_position == "F" ~ "Forward",
+      TRUE ~ secondary_position
+    )
+  ) %>%
+  # Remove rows where height data appears in position columns
+  filter(
+    is.na(primary_position) | !grepl("[56']", primary_position),
+    is.na(secondary_position) | !grepl("[56']", secondary_position)
+  )
+
+# Check position distribution
+wbb_rosters %>% 
+  count(primary_position, sort = TRUE)
+```
+
+## Year Classification Cleaning
+
+We standardize year classifications to: Freshman, Sophomore, Junior, Senior, Graduate Student, Fifth Year, Sixth Year. We also track redshirt status separately.
+
+```{r clean-years}
+# Load year standardization mapping
+years_cleaned <- read_csv("years_cleaned.csv") %>%
+  rename(year_clean = `year-clean`)
+
+wbb_rosters <- wbb_rosters %>%
+  left_join(years_cleaned, by = "year") %>%
+  mutate(
+    # Handle graduation year format (e.g., '26 = Senior)
+    year_clean = case_when(
+      year %in% c("2029", "'29") ~ "Freshman",
+      year %in% c("2028", "'28") ~ "Sophomore",
+      year %in% c("2027", "'27") ~ "Junior", 
+      year %in% c("2026", "'26") ~ "Senior",
+      TRUE ~ year_clean
+    )
+  )
+
+# Check year distribution
+wbb_rosters %>% 
+  count(year_clean, sort = TRUE)
+```
+
+## High School and Previous School Cleaning
+
+Some records list high schools in the previous_school column. We separate these and backfill missing high school data from previous roster years.
+
+```{r clean-schools}
+# Identify high school patterns
+hs_indicators <- c("HS", "H.S.", "High School")
+hs_pattern <- paste(hs_indicators, collapse = "|")
+
+# Find previous schools that are actually high schools
+previous_school_is_hs <- wbb_rosters %>%
+  filter(
+    is.na(high_school),
+    !is.na(previous_school),
+    str_detect(previous_school, hs_pattern)
+  ) %>%
+  pull(previous_school)
+
+# Clean high school assignments
+wbb_rosters <- wbb_rosters %>%
+  mutate(
+    hs_clean = case_when(
+      is.na(high_school) & previous_school %in% previous_school_is_hs ~ previous_school,
+      TRUE ~ high_school
+    ),
+    # Clear previous_school when it matches high school
+    previous_school = ifelse(previous_school == hs_clean, NA, previous_school)
+  )
+
+# Backfill missing high schools from previous year's data
+if (file.exists("wbb_rosters_2024_25.csv")) {
+  previous_rosters <- read_csv("wbb_rosters_2024_25.csv") %>%
+    # Deduplicate previous year's data by keeping first occurrence
+    distinct(name, team, ncaa_id, .keep_all = TRUE)
+  
+  no_hs <- wbb_rosters %>% 
+    filter(is.na(high_school)) %>%
+    # Deduplicate current data for matching
+    distinct(name, team, ncaa_id, .keep_all = TRUE)
+  
+  with_hs <- wbb_rosters %>% filter(!is.na(high_school))
+  
+  # Find matches in previous year's data
+  matches <- no_hs %>%
+    inner_join(previous_rosters, by = c("name", "team", "ncaa_id"), 
+               relationship = "many-to-one") %>%
+    select(ncaa_id, team, name, high_school = high_school.y) %>%
+    filter(!is.na(high_school)) %>%
+    # Ensure no duplicates in matches
+    distinct(ncaa_id, team, name, .keep_all = TRUE)
+  
+  if (nrow(matches) > 0) {
+    # Apply high school data back to original records (may be multiple per player)
+    hs_adds <- wbb_rosters %>%
+      filter(is.na(high_school)) %>%
+      inner_join(matches, by = c("ncaa_id", "team", "name")) %>%
+      select(-high_school.x) %>%
+      rename(high_school = high_school.y)
+    
+    no_hs_final <- wbb_rosters %>%
+      filter(is.na(high_school)) %>%
+      anti_join(matches, by = c("ncaa_id", "team", "name"))
+    
+    wbb_rosters <- bind_rows(with_hs, no_hs_final, hs_adds) %>%
+      arrange(ncaa_id, jersey)
+    
+    cat("Backfilled", nrow(hs_adds), "high school records from previous year")
+  }
+}
+```
+
+### High School Name Standardization
+
+Apply standardized high school names to reduce duplicates and improve consistency. See `HIGH_SCHOOL_STANDARDIZATION.md` for details.
+
+```{r standardize-high-schools}
+# Load high school mapping
+hs_mapping_file <- "data/high_school_mapping.csv"
+
+if (file.exists(hs_mapping_file)) {
+  cat("Applying high school standardization...\n")
+
+  hs_mapping <- read_csv(hs_mapping_file, show_col_types = FALSE) %>%
+    select(high_school_original, high_school_standardized, confidence, source)
+
+  cat(sprintf("  Loaded %d high school mappings\n", nrow(hs_mapping)))
+
+  # Count unique schools before standardization
+  unique_before <- n_distinct(wbb_rosters$hs_clean[!is.na(wbb_rosters$hs_clean)])
+
+  # Apply mapping
+  wbb_rosters <- wbb_rosters %>%
+    left_join(
+      hs_mapping,
+      by = c("hs_clean" = "high_school_original")
+    ) %>%
+    mutate(
+      # Use standardized name if available, otherwise keep hs_clean
+      high_school_standardized = coalesce(high_school_standardized, hs_clean),
+      # Set confidence level
+      hs_confidence = case_when(
+        !is.na(confidence) ~ confidence,
+        country_clean != "USA" ~ "international",
+        is.na(hs_clean) ~ "missing",
+        TRUE ~ "unstandardized"
+      ),
+      # Track if standardization was applied
+      hs_was_standardized = hs_clean != high_school_standardized &
+                           !is.na(high_school_standardized)
+    ) %>%
+    select(-confidence, -source)
+
+  # Count unique schools after standardization
+  unique_after <- n_distinct(wbb_rosters$high_school_standardized[!is.na(wbb_rosters$high_school_standardized)])
+
+  # Report statistics
+  total_hs <- sum(!is.na(wbb_rosters$hs_clean))
+  standardized <- sum(wbb_rosters$hs_was_standardized, na.rm = TRUE)
+
+  cat(sprintf("  Total records with high schools: %d\n", total_hs))
+  cat(sprintf("  Standardized: %d (%.1f%%)\n",
+              standardized,
+              standardized / total_hs * 100))
+  cat(sprintf("  Unique schools before: %d\n", unique_before))
+  cat(sprintf("  Unique schools after: %d\n", unique_after))
+  cat(sprintf("  Deduplication: %.1f%%\n",
+              (unique_before - unique_after) / unique_before * 100))
+
+  cat("\n  Confidence breakdown:\n")
+  print(table(wbb_rosters$hs_confidence))
+
+} else {
+  cat("Note: High school mapping file not found:", hs_mapping_file, "\n")
+  cat("      Run scripts/normalize_high_schools.py and scripts/build_hs_mapping.py to create it\n")
+  cat("      Proceeding without standardization...\n")
+
+  # Create placeholder columns
+  wbb_rosters <- wbb_rosters %>%
+    mutate(
+      high_school_standardized = hs_clean,
+      hs_confidence = "none",
+      hs_was_standardized = FALSE
+    )
+}
+```
+
+## Geographic Data Cleaning
+
+We clean hometown/homestate data to standardize state abbreviations and identify international players.
+
+```{r clean-geography}
+# Standardize hometown format
+wbb_rosters <- wbb_rosters %>%
+  mutate(
+    hometown_cleaned = hometown %>%
+      str_to_upper() %>%
+      str_replace_all("\\.", "") %>%
+      str_replace("/.*", "") %>%
+      str_replace("\\.$", "") %>%
+      # Fix reversed format: "ILLINOIS, CHICAGO" -> "CHICAGO, ILLINOIS"
+      str_replace("^ILLINOIS, CHICAGO$", "CHICAGO, ILLINOIS") %>%
+      str_replace(",", ", ") %>%
+      str_replace("-", " ") %>%
+      str_squish()
+  )
+
+# Create extended state dictionary for postmastr
+states_non_standard <- pm_append(
+  type = "state",
+  input = c("SD.", "MASS", "CALIF", "MICH", "NEB", "IND", "MINN", "ORE", "OHIO", 
+            "FLA", "MISS", "TENN", "ARIZ", "KAN", "ALA", "OKLA", "WIS", "ILL", 
+            "WASH", "ARK", "COLO", "NEV", "CONN", "WISC", "WVA", "DEL", "WYO",
+            "CALI", "LOUIS", "VIRG", "MONT", "PENN", "TEX", "KANS", "NEBR", 
+            "IDA", "COL"),
+  output = c("SD", "MA", "CA", "MI", "NE", "IN", "MN", "OR", "OH", "FL", "MS", 
+             "TN", "AZ", "KS", "AL", "OK", "WI", "IL", "WA", "AR", "CO", "NV", 
+             "CT", "WI", "WV", "DE", "WY", "CA", "LA", "VA", "MT", "PA", "TX", 
+             "KS", "NE", "ID", "CO"),
+  locale = "us"
+)
+
+dict <- pm_dictionary(type = "state", case = c("title", "upper", "lower"), 
+                     append = states_non_standard)
+
+# Identify addresses and parse states using postmastr
+wbb_rosters <- wbb_rosters %>%
+  pm_identify(var = "hometown_cleaned")
+
+parsed <- wbb_rosters %>%
+  pm_prep(var = "hometown_cleaned", type = "street") %>%
+  pm_state_parse(dict)
+
+# Join parsed results
+wbb_rosters <- wbb_rosters %>%
+  left_join(parsed, by = "pm.uid") %>%
+  separate(hometown, c("hometown", "homestate"), sep = ",", extra = "merge") %>%
+  mutate(
+    homestate = str_trim(homestate),
+    homestate = str_replace(homestate, "\\.", ""),
+    homestate = case_when(
+      is.na(abbr2state(homestate)) ~ homestate,
+      TRUE ~ abbr2state(homestate)
+    )
+  )
+
+# Handle special state cases
+wbb_rosters <- wbb_rosters %>%
+  mutate(
+    pm.state = case_when(
+      homestate %in% c("Hawai'i", "O'ahu") ~ "HI",
+      homestate == "Ken" ~ "KY",
+      homestate %in% c("Caif", "Cal", "Calfiornia", "Califonia") ~ "CA",
+      homestate %in% c("Illi", "IIl", "Illnois") ~ "IL",
+      homestate == "Min" ~ "MN",
+      homestate == "N C." ~ "NC",
+      homestate == "NMex." ~ "NM",
+      homestate == "Oreg" ~ "OR",
+      homestate == "US.V.I." ~ "USVI",
+      homestate == "Ver" ~ "VT",
+      homestate == "Was" ~ "WA",
+      homestate == "WS" ~ "WI",
+      homestate == "NYC" ~ "NY",
+      # Special cases
+      is.na(pm.state) & is.na(homestate) & str_detect(hometown_cleaned, "^ARLINGTON$") ~ "TX",
+      is.na(pm.state) & is.na(homestate) & str_detect(hometown_cleaned, "^LOS ANGELES$") ~ "CA",
+      is.na(pm.state) & is.na(homestate) & str_detect(hometown_cleaned, "^GREENWOOD$") ~ "SC",
+      is.na(pm.state) & is.na(homestate) & str_detect(hometown_cleaned, "^GWYNN PARK$") ~ "MD",
+      is.na(pm.state) & is.na(homestate) & str_detect(hometown_cleaned, "^KING COVE$") ~ "AK",
+      TRUE ~ pm.state
+    )
+  )
+```
+
+## Country Identification
+
+We identify international players using FIBA nations list and handle special cases for countries not in FIBA.
+
+```{r clean-countries}
+# Scrape FIBA nations
+nations <- FIBA_URL %>%
+  read_html() %>%
+  html_table()
+
+nations_df <- bind_rows(nations[[1]], nations[[2]], nations[[3]]) %>%
+  filter(country != "Puerto Rico") %>% # Puerto Rico is FIBA but also USA
+  mutate(country = toupper(country)) %>%
+  select(country)
+
+# Add non-FIBA nations
+added_nations <- data.frame(
+  country = c("ENGLAND", "RUSSIA", "SCOTLAND", "NORTHERN IRELAND")
+)
+nations_df <- rbind(nations_df, added_nations)
+
+# Extract potential country from last part of hometown
+wbb_rosters <- wbb_rosters %>%
+  mutate(
+    country = case_when(!is.na(pm.state) ~ "USA"),
+    temp = map_chr(strsplit(hometown_cleaned, ", ", fixed = TRUE), tail, 1),
+    temp = if_else(temp %in% c("NA", ""), NA_character_, temp)
+  ) %>%
+  left_join(nations_df, by = c("temp" = "country")) %>%
+  mutate(
+    country = case_when(
+      is.na(country) ~ temp,
+      !is.na(country) ~ country,
+      country == "USA" ~ "USA"
+    )
+  )
+
+# Standardize country names
+wbb_rosters <- wbb_rosters %>%
+  mutate(
+    country = case_when(
+      # Canadian provinces
+      country %in% c("BC", "QUEBEC", "BRITISH COLUMBIA", "ALBERTA", "ONTARIO", 
+                    "NOVA SCOTIA", "ONT", "QUÉBEC", "MANITOBA", "QUE", "ON", 
+                    "QC", "ALBERTA (AB)", "ONT CANADA", "BC CANADA", "BC,CANADA", 
+                    "ON CANADA", "ALBERTA CANADA", "SASKATCHEWAN", "CN", "AB", 
+                    "ALTA") ~ "CANADA",
+      # Australian states
+      country %in% c("VICTORIA", "SOUTH AUSTRALIA", "WESTERN AUSTRALIA", 
+                    "TASMANIA", "AUSTRAILA", "AU", "AUS", 
+                    "QUEENSLAND AUSTRALIA") ~ "AUSTRALIA",
+      # UK variations
+      country %in% c("GREAT BRITAIN", "ENGLAND", "ENG", "UK", "WALES", 
+                    "NORTHERN IRELAND", "EAST MIDLANDS") ~ "UNITED KINGDOM",
+      # Other standardizations
+      country == "BARCELONA" ~ "SPAIN",
+      country == "HAWAI'I" ~ "USA",
+      country == "SWEEDEN" ~ "SWEDEN",
+      country == 'HUDIKSVALL' ~ 'SWEDEN',
+      country == 'KEFLAVIK ICELAND' ~ 'ICELAND',
+      country == "CZECHIA" ~ "CZECH REPUBLIC",
+      country == "DR" ~ "DOMINICAN REPUBLIC",
+      country %in% c('THE NETHERLANDS', 'NETHLERLANDS', 'NOORD HOLLAND') ~ 'NETHERLANDS',
+      country == 'MÉXICO' ~ 'MEXICO',
+      country == 'NZ' ~ 'NEW ZEALAND',
+      country == 'SÉNÉGAL' ~ 'SENEGAL',
+      country %in% c('DR CONGO', 'DEMOCRATIC REPUBLIC OF CONGO', 'CONGO') ~ 'DEMOCRATIC REPUBLIC OF THE CONGO',
+      country %in% c("TURKIYE", "TÜRKIYE") ~ "TURKEY",
+      TRUE ~ country
+    )
+  ) %>%
+  select(-temp)
+
+# Show country distribution
+wbb_rosters %>% 
+  count(country, sort = TRUE) 
+
+wbb_rosters |> filter(country == 'NEW')
+```
+
+## Previous School Standardization
+
+We standardize previous school names to handle variations in how schools are referenced.
+
+```{r standardize-previous-schools}
+# Create standardization mapping for most common variations
+previous_school_mapping <- tribble(
+  ~previous_school, ~previous_school_clean,
+  "Academic of Art University", "Academy of Art University",
+  "Air Force Academy", "Air Force",
+  "American Univ.", "American",
+  "Arkansas Little Rock", "Arkansas-Little Rock",
+  "Austin Peay State", "Austin Peay",
+  "Cal Poly SLO", "Cal Poly",
+  "CSU Bakersfield", "Cal State Bakersfield",
+  "California Baptist University", "California Baptist",
+  "ETSU", "East Tennessee State",
+  "FDU", "Fairleigh Dickinson",
+  "JMU", "James Madison",
+  "LIU", "Long Island",
+  "Louisiana State", "LSU",
+  "Miami (FL)", "Miami",
+  "Miami (OH)", "Miami Ohio",
+  "N.C. State", "NC State",
+  "Ole Miss", "Mississippi",
+  "TCU", "Texas Christian",
+  "UCF", "Central Florida",
+  "UCSB", "UC Santa Barbara",
+  "UIC", "Illinois-Chicago",
+  "UMass", "Massachusetts",
+  "USF", "South Florida",
+  "UTEP", "Texas-El Paso",
+  "VCU", "Virginia Commonwealth"
+)
+
+# Apply standardization
+wbb_rosters <- wbb_rosters %>%
+  left_join(previous_school_mapping, by = "previous_school") %>%
+  mutate(
+    previous_school_clean = coalesce(previous_school_clean, previous_school)
+  )
+
+# Show transfer statistics
+transfer_summary <- wbb_rosters %>%
+  filter(!is.na(previous_school_clean)) %>%
+  count(previous_school_clean, sort = TRUE) %>%
+  head(10)
+
+print(transfer_summary)
+```
+
+## Final Data Preparation
+
+```{r final-cleanup}
+# Remove temporary columns and rename cleaned columns
+wbb_rosters_final <- wbb_rosters %>%
+  select(-pm.id, -pm.uid, -pm.type, -pm.address, -has_roster, -roster) %>%
+  rename(
+    height_clean = height,
+    position_clean = position_full,
+    hometown_clean = hometown_cleaned,
+    state_clean = pm.state,
+    country_clean = country
+  ) %>%
+  # Remove duplicates and add season identifier
+  distinct() %>%
+  mutate(season = "2025-26") %>%
+  arrange(ncaa_id, jersey)
+
+# Write final dataset
+write_csv(wbb_rosters_final, OUTPUT_FILE, quote = "all", na = "")
+
+cat("Final dataset written to", OUTPUT_FILE)
+cat("\nFinal statistics:")
+cat("\n- Total players:", nrow(wbb_rosters_final))
+cat("\n- Teams:", n_distinct(wbb_rosters_final$ncaa_id))
+cat("\n- Transfer players:", sum(!is.na(wbb_rosters_final$previous_school_clean)))
+cat("\n- International players:", sum(wbb_rosters_final$country_clean != "USA", na.rm = TRUE))
+```
+
+## Transfer Analysis by Conference
+
+```{r transfer-analysis}
+# Analyze transfer patterns for D1 teams
+d1_transfer_analysis <- wbb_rosters_final %>%
+  filter(division == "I") %>%
+  group_by(team, conference) %>%
+  summarise(
+    total_players = n(),
+    transfers = sum(!is.na(previous_school_clean)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    transfer_pct = transfers / total_players * 100
+  ) %>%
+  arrange(desc(transfer_pct))
+
+# Conference-level transfer rates
+conference_transfers <- d1_transfer_analysis %>%
+  group_by(conference) %>%
+  summarise(
+    total_players = sum(total_players),
+    total_transfers = sum(transfers),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    transfer_pct = total_transfers / total_players * 100
+  ) %>%
+  arrange(desc(transfer_pct))
+
+print("Top conferences by transfer percentage:")
+print(head(conference_transfers, 20))
+```
+
+
+```{r}
+wbb_rosters_final |> 
+  filter(state_clean == 'MD') |> 
+  group_by(hometown_clean) |> 
+  summarize(count = n()) |> 
+  arrange(desc(count))
+```
+
