@@ -13,12 +13,15 @@ library(janitor)
 
 wbb_teams <- read_csv("womens-college-basketball-main/teams.csv") |> clean_names()
 
+
+wbb_rosters21 <- read_csv("womens-college-basketball-main/wbb_rosters_2020_21.csv") |> mutate(player_id = as.character(player_id))
+wbb_rosters22 <- read_csv("womens-college-basketball-main/wbb_rosters_2021_22.csv") |> mutate(player_id = as.character(player_id))
 wbb_rosters23 <- read_csv("womens-college-basketball-main/wbb_rosters_2022_23.csv") |> mutate(player_id = as.character(player_id))
 wbb_rosters24 <- read_csv("womens-college-basketball-main/wbb_rosters_2023_24.csv") |> mutate(player_id = as.character(player_id))
 wbb_rosters25 <- read_csv("womens-college-basketball-main/wbb_rosters_2024_25.csv") |> mutate(player_id = as.character(player_id))
 wbb_rosters26 <- read_csv("womens-college-basketball-main/wbb_rosters_2025_26.csv")
 
-combined_rosters <- bind_rows(list(wbb_rosters23, wbb_rosters24, wbb_rosters25)) # <- This code line puts all the roster info into one dataframe
+combined_rosters <- bind_rows(list(wbb_rosters23, wbb_rosters24, wbb_rosters25, wbb_rosters26)) # <- This code line puts all the roster info into one dataframe
 
 non_us <- read_csv("womens-college-basketball-main/non_us.csv")|> clean_names()
 
@@ -31,16 +34,18 @@ The other dataframes we got were the teams, which doesn't have a ton of relevant
 
 As far as the limitations, this data only goes back four years. Not a huge sample of time to look at, but there is a LOT of data for the four years we have access to in this project. Because of that timeframe, we can't really answer the NIL questions we posed last week and we will need to adjust our time frames for the change over time questions.
 
+**Do Power Five schools bring in more international players than mid and low-major schools? By how much?**
+
 ```{r}
 combined_rosters_international <- combined_rosters |>
   mutate(
     conference_type = case_when(
-      str_detect(conference, "ACC") ~ "Power5",
-      str_detect(conference, "Big East") ~ "Power5",
-      str_detect(conference, "Big Ten") ~ "Power5",
-      str_detect(conference, "Big 12") ~ "Power5",
-      str_detect(conference, "Pac-12") ~ "Power5",
-      str_detect(conference, "SEC") ~ "Power5",
+      str_detect(conference, "ACC") ~ "Power 5",
+      str_detect(conference, "Big East") ~ "Power 5",
+      str_detect(conference, "Big Ten") ~ "Power 5",
+      str_detect(conference, "Big 12") ~ "Power 5",
+      str_detect(conference, "Pac-12") ~ "Power 5",
+      str_detect(conference, "SEC") ~ "Power 5",
       .default = "Mid/Low"
     ),
     international = case_when(
@@ -60,4 +65,83 @@ combined_rosters_international |>
     international_players = sum(international == "Yes"),
     percent_international = international_players / total_players * 100
   )
+```
+
+**Have coaching changes increased since NIL was introduced?**
+
+```{r}
+coaching_turnover <- coach_history |>
+  filter(position_title_standardized == "Head Coach") |>
+  filter(category == "College") |>
+  mutate(coach_change = !is.na(end_year))
+
+coaching_turnover |>
+  group_by(coach_change) |>
+  summarise(total = n())
+```
+
+**How many 4-year one-team seniors were there pre-NIL and how many are there now?**
+
+```{r}
+pre_nil_seniors <- wbb_rosters21 |>
+  filter(str_detect(year, "Senior|Graduate|Graduate Student|Fifth Year|Redshirt Senior|Sr.|R-Sr.|Gr.")) |>
+  mutate(
+    fouryearsenior = case_when(
+      is.na(previous_school_clean) ~ "Yes",
+      .default = "No"
+    ))
+
+pre_nil_seniors |>
+  summarise(total_players = n(),
+            no_transfer = sum(fouryearsenior == "Yes"),
+            transfer = sum(fouryearsenior == "No"),
+            percent_loyal_pre = no_transfer / total_players * 100)
+
+post_nil_seniors <- wbb_rosters26 |>
+  filter(str_detect(year, "Senior|Graduate|Graduate Student|Fifth Year|Redshirt Senior|Sr.|R-Sr.|Gr.")) |>
+    mutate(
+    fouryearsenior = case_when(
+      is.na(previous_school_clean) ~ "Yes",
+      .default = "No"
+    ))
+
+post_nil_seniors |>
+  summarise(total_players = n(),
+            no_transfer = sum(fouryearsenior == "Yes"),
+            transfer = sum(fouryearsenior == "No"),
+            percent_loyal_post = no_transfer / total_players * 100)
+```
+
+**What is the geographic breakdown for the most popular state?**
+
+```{r}
+popular_state <- combined_rosters |>
+  group_by(homestate) |>
+  summarise(total = n()) |>
+  arrange(desc(total))
+popular_state
+
+pa_cities <- places(state = "PA", cb = TRUE) |> clean_names() |>
+  left_join(combined_rosters, join_by(name == hometown)) |>
+  group_by(name) |>
+  summarise(total = n()) |>
+  arrange(desc(total))
+
+ggplot() +
+  geom_sf(data = pa_cities, aes(fill = total), color = NA) +
+  scale_fill_viridis_c(option = "magma") +
+  theme_minimal()
+```
+
+**How many players play for an in-state team?**
+
+```{r}
+home_state_stay <- combined_rosters |>
+  left_join(wbb_teams, join_by(team)) |>
+  mutate(stay_home = replace_na(state_clean == team_state.y, FALSE))
+
+home_state_stay |>
+  group_by(stay_home) |>
+  summarise(total = n()) |>
+  arrange(desc(total))
 ```
