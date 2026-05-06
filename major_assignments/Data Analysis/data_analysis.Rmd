@@ -1,39 +1,63 @@
 ---
-title: "Data Analysis Project"
-author: "Zach Sturgill"
-date: "2026-04-27"
-output: html_notebook
+title: "final_project"
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Introduction
-
-In this project, we are analyzing the women's college basketball dataset.
-
-## Load libraries
-
-Loading required libraries for this analysis.
-
-```{r echo=FALSE, message=FALSE}
+```{r}
 library(tidyverse)
-library(lubridate)
 library(janitor)
+
+wbb_teams <- read_csv("womens-college-basketball-main/teams.csv") |> clean_names()
+
+wbb_rosters23 <- read_csv("womens-college-basketball-main/wbb_rosters_2022_23.csv") |> mutate(player_id = as.character(player_id))
+wbb_rosters24 <- read_csv("womens-college-basketball-main/wbb_rosters_2023_24.csv") |> mutate(player_id = as.character(player_id))
+wbb_rosters25 <- read_csv("womens-college-basketball-main/wbb_rosters_2024_25.csv") |> mutate(player_id = as.character(player_id))
+wbb_rosters26 <- read_csv("womens-college-basketball-main/wbb_rosters_2025_26.csv")
+
+combined_rosters <- bind_rows(list(wbb_rosters23, wbb_rosters24, wbb_rosters25)) # <- This code line puts all the roster info into one dataframe
+
+non_us <- read_csv("womens-college-basketball-main/non_us.csv")|> clean_names()
+
+coach_history <- read_csv("womens-college-basketball-main/coaches/coaches_with_history.csv") |> clean_names()
 ```
 
-## Load and Cleaning Data
+Data exploration: Once all the roster data is combined, we have over 41000 data points across 31 different variables. While some of those 31 are pretty useless, (NCAA ID, Player ID, etc), some things we didn't expect it to include like high school and hometowns were in the dataset.
 
-In this section, describe the source of the data, write a basic data dictionary for data you are working with, and discuss any caveats or issues you discovered working with this data.
+The other dataframes we got were the teams, which doesn't have a ton of relevant information at first glance, but does show us that there are over 1100 schools that make up this dataset, a non-us chart that shows the amount of players from every county and the percent change from 2023 to 2024, then lastly there's also a coaching history dataframe. This one has almost 13000 observations, stating the person's title on the staff, their school and tenure.
+
+As far as the limitations, this data only goes back four years. Not a huge sample of time to look at, but there is a LOT of data for the four years we have access to in this project. Because of that timeframe, we can't really answer the NIL questions we posed last week and we will need to adjust our time frames for the change over time questions.
 
 ```{r}
-wbb_2020_roster <- read_csv("womens-college-basketball-main/wbb_rosters_2020_21.csv") |> clean_names()
-wbb_2021_roster <- read_csv("womens-college-basketball-main/wbb_rosters_2021_22.csv") |> clean_names()
-wbb_2022_roster <- read_csv("womens-college-basketball-main/wbb_rosters_2022_23.csv") |> clean_names()
-wbb_2023_roster <- read_csv("womens-college-basketball-main/wbb_rosters_2023_24.csv") |> clean_names()
-wbb_2024_roster <- read_csv("womens-college-basketball-main/wbb_rosters_2024_25.csv") |> clean_names()
-wbb_2025_roster <- read_csv("womens-college-basketball-main/wbb_rosters_2025_26.csv") |> clean_names()
-coaching_history <- read_csv("womens-college-basketball-main/coaches/coaches_with_history.csv") |> clean_names()
-teams <- read_csv("womens-college-basketball-main/teams.csv") |> clean_names()
+combined_rosters_international <- combined_rosters |>
+  mutate(
+    conference_type = case_when(
+      str_detect(conference, "ACC") ~ "Power5",
+      str_detect(conference, "Big East") ~ "Power5",
+      str_detect(conference, "Big Ten") ~ "Power5",
+      str_detect(conference, "Big 12") ~ "Power5",
+      str_detect(conference, "Pac-12") ~ "Power5",
+      str_detect(conference, "SEC") ~ "Power5",
+      .default = "Mid/Low"
+    ),
+    international = case_when(
+      str_detect(country_clean, "USA") ~ "No",
+      .default = "Yes"
+    )
+  )
+
+combined_rosters_international |>
+  group_by(conference_type, international) |>
+  summarise(count = n())
+
+combined_rosters_international |>
+  group_by(conference_type) |>
+  summarise(
+    total_players = n(),
+    international_players = sum(international == "Yes"),
+    percent_international = international_players / total_players * 100
+  )
 ```
