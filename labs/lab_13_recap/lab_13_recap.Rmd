@@ -22,6 +22,7 @@ library(janitor)
 library(tigris)
 library(tidycensus)
 library(corrr)
+library(tidytext)
 ```
 
 ## Load Data
@@ -44,10 +45,10 @@ md_counties <- counties() |>  filter(STATEFP == "24")
 
 ```{r}
 # Join the childcare data with the county data 
-
+inspections_with_counties <- childcare_inspections |> left_join(md_counties, by=c("fips" = "GEOID"))
 ```
 
-##### A1:
+##### A1: NAMESLAD is better to be used because it differentiates Baltimore City and Baltimore County.
 
 ------------------------------------------------------------------------
 
@@ -55,12 +56,17 @@ md_counties <- counties() |>  filter(STATEFP == "24")
 
 ```{r}
 # Calculate the percentage of overdue inspections per county
-
+inspections_with_counties <- inspections_with_counties |> mutate(pct_overdue = overdue/total * 100)
 # Create the chart with ggplot
-
+inspections_with_counties |>
+  ggplot(aes(x=NAMELSAD, y=pct_overdue)) +
+  geom_col() +
+  coord_flip() +
+      labs(x = "County",
+      y = "Percentage of facilities w/ overdue inspections")
 ```
 
-##### **A2:**
+##### **A2: Montgomery County**
 
 ------------------------------------------------------------------------
 
@@ -68,32 +74,39 @@ md_counties <- counties() |>  filter(STATEFP == "24")
 
 ```{r}
 # First, grab data from the ACS. The ACS variable for children age under 5 is B06001_002 We want 2022 data.
-
+children_under_five <- get_acs(
+  geography = "county",
+  state = "MD",
+  variables = "B06001_002",
+  year = 2022
+)
 ```
 
 ```{r}
 # Rename the column name 'estimate', which has our population data, with something more useful, like 'children_pop'
-
+children_under_five <- children_under_five |> rename(children_pop = estimate)
 ```
 
 ```{r}
 # Join the dataframes
-
+children_with_facility <- inspections_with_counties |> left_join(children_under_five, by=c("fips" = "GEOID"))
 # Calculate the rates for children per facility
-
+children_with_facility <- children_with_facility |> mutate(children_per_facility = children_pop/total)
 ```
 
-##### **A3:**
+##### **A3: Garrett County**
 
 ------------------------------------------------------------------------
 
 #### **Q4** Make a map of the results for question 3. Are there any areas of the state that are more lacking in childcare facilities?
 
 ```{r}
-
+ggplot() +
+  geom_sf(data=children_with_facility, aes(fill=children_per_facility)) +
+  theme_minimal()
 ```
 
-##### **A4**:
+##### **A4**: Northern Maryland is lacking in childcare facilities.
 
 ------------------------------------------------------------------------
 
@@ -101,30 +114,38 @@ md_counties <- counties() |>  filter(STATEFP == "24")
 
 ```{r}
 # Again, grab data from the ACS. The ACS variable for median income is B19013_001. We want 2022 data again.
-
+median_income <-get_acs(
+  geography = "county",
+  state = "MD",
+  variables = "B19013_001",
+  year = 2022
+)
 ```
 
 ```{r}
 # Rename the column name 'estimate', which has our income data, with something more useful, like 'median_income'
-
+median_income <- median_income |> rename(median_income = estimate)
 ```
 
 ```{r}
 # Join the dataframes
-
+childcare_with_income <- children_with_facility |> left_join(median_income, by=c("fips" = "GEOID"))
 ```
 
 ```{r}
 # Create a scatterplot with median income and rate of children per facility
-
+childcare_with_income |>
+  ggplot() +
+  geom_point(aes(x=children_per_facility,y=median_income)) +
+  geom_smooth(aes(x=children_per_facility,y=median_income), method="lm")
 ```
 
 ```{r}
 # Create a correlation test.
-
+cor.test(childcare_with_income$children_per_facility, childcare_with_income$median_income)
 ```
 
-##### A5:
+##### A5: There is not much of a correlation between the two because of the large p value.
 
 ------------------------------------------------------------------------
 
@@ -137,12 +158,19 @@ reports <- read_csv('data/childcare-informal-provider-inspections.csv') |> clean
 
 ```{r}
 # Create a stopword dictionary (feel free to include more words)
-
+data("stop_words")
 ```
 
 ```{r}
 # Unnest tokens into bigrams, removing stop words and repasting bigrams, list bigrams
-
+reports |>
+  unnest_tokens(bigram, initial_findings, token = "ngrams", n = 2) |>
+  separate(bigram, c("word1", "word2"), sep = " ") |>
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word) |>
+  mutate(bigram = paste(word1, word2, sep = " ")) |>
+  group_by(bigram) |>
+  tally(sort = TRUE)
 ```
 
-##### A6:
+##### A6: I think the most interesting issues listed are emergency bag and cleaning products.
